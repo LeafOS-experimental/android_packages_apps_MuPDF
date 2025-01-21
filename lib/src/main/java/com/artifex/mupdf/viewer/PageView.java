@@ -23,6 +23,7 @@ import android.graphics.Path;
 import android.graphics.Point;
 import android.graphics.PointF;
 import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.FileUriExposedException;
@@ -74,18 +75,20 @@ public class PageView extends ViewGroup {
 	private       Bitmap    mEntireBm;
 	private       Matrix    mEntireMat;
 	private       AsyncTask<Void,Void,Link[]> mGetLinkInfo;
-	private       CancellableAsyncTask<Void, Void> mDrawEntire;
+	private       CancellableAsyncTask<Void, Boolean> mDrawEntire;
 
 	private       Point     mPatchViewSize; // View size on the basis of which the patch was created
 	private       Rect      mPatchArea;
 	private       ImageView mPatch;
 	private       Bitmap    mPatchBm;
-	private       CancellableAsyncTask<Void,Void> mDrawPatch;
+	private       CancellableAsyncTask<Void, Boolean> mDrawPatch;
 	private       Quad      mSearchBoxes[][];
 	protected     Link      mLinks[];
 	private       View      mSearchView;
 	private       boolean   mIsBlank;
 	private       boolean   mHighlightLinks;
+
+	private       ImageView mErrorIndicator;
 
 	private       ProgressBar mBusyIndicator;
 	private final Handler   mHandler = new Handler();
@@ -139,6 +142,8 @@ public class PageView extends ViewGroup {
 
 		mSearchBoxes = null;
 		mLinks = null;
+
+		clearRenderError();
 	}
 
 	public void releaseResources() {
@@ -148,6 +153,7 @@ public class PageView extends ViewGroup {
 			removeView(mBusyIndicator);
 			mBusyIndicator = null;
 		}
+		clearRenderError();
 	}
 
 	public void releaseBitmaps() {
@@ -177,6 +183,44 @@ public class PageView extends ViewGroup {
 		setBackgroundColor(BACKGROUND_COLOR);
 	}
 
+	protected void clearRenderError() {
+		if (mErrorIndicator == null)
+			return;
+
+		removeView(mErrorIndicator);
+		mErrorIndicator = null;
+		invalidate();
+	}
+
+	protected void setRenderError(String why) {
+
+		int page = mPageNumber;
+		reinit();
+		mPageNumber = page;
+
+		if (mBusyIndicator != null) {
+			removeView(mBusyIndicator);
+			mBusyIndicator = null;
+		}
+		if (mSearchView != null) {
+			removeView(mSearchView);
+			mSearchView = null;
+		}
+
+		if (mErrorIndicator == null) {
+			mErrorIndicator = new OpaqueImageView(mContext);
+			mErrorIndicator.setScaleType(ImageView.ScaleType.CENTER);
+			addView(mErrorIndicator);
+			Drawable mErrorIcon = getResources().getDrawable(R.drawable.ic_error_red_24dp);
+			mErrorIndicator.setImageDrawable(mErrorIcon);
+			mErrorIndicator.setBackgroundColor(BACKGROUND_COLOR);
+		}
+
+		setBackgroundColor(Color.TRANSPARENT);
+		mErrorIndicator.bringToFront();
+		mErrorIndicator.invalidate();
+	}
+
 	public void setPage(int page, PointF size) {
 		// Cancel pending render task
 		if (mDrawEntire != null) {
@@ -190,10 +234,10 @@ public class PageView extends ViewGroup {
 			mSearchView.invalidate();
 
 		mPageNumber = page;
-		if (mEntire == null) {
-			mEntire = new OpaqueImageView(mContext);
-			mEntire.setScaleType(ImageView.ScaleType.MATRIX);
-			addView(mEntire);
+
+		if (size == null) {
+			setRenderError("Error loading page");
+			size = new PointF(612, 792);
 		}
 
 		// Calculate scaled size that fits within the screen limits
@@ -201,6 +245,15 @@ public class PageView extends ViewGroup {
 		mSourceScale = Math.min(mParentSize.x/size.x, mParentSize.y/size.y);
 		Point newSize = new Point((int)(size.x*mSourceScale), (int)(size.y*mSourceScale));
 		mSize = newSize;
+
+		if (mErrorIndicator != null)
+			return;
+
+		if (mEntire == null) {
+			mEntire = new OpaqueImageView(mContext);
+			mEntire.setScaleType(ImageView.ScaleType.MATRIX);
+			addView(mEntire);
+		}
 
 		mEntire.setImageBitmap(null);
 		mEntire.invalidate();
@@ -221,7 +274,7 @@ public class PageView extends ViewGroup {
 		mGetLinkInfo.execute();
 
 		// Render the page in the background
-		mDrawEntire = new CancellableAsyncTask<Void, Void>(getDrawPageTask(mEntireBm, mSize.x, mSize.y, 0, 0, mSize.x, mSize.y)) {
+		mDrawEntire = new CancellableAsyncTask<Void, Boolean>(getDrawPageTask(mEntireBm, mSize.x, mSize.y, 0, 0, mSize.x, mSize.y)) {
 
 			@Override
 			public void onPreExecute() {
@@ -244,13 +297,17 @@ public class PageView extends ViewGroup {
 			}
 
 			@Override
-			public void onPostExecute(Void result) {
+			public void onPostExecute(Boolean result) {
 				removeView(mBusyIndicator);
 				mBusyIndicator = null;
-				mEntire.setImageBitmap(mEntireBm);
-				mEntire.invalidate();
+				if (result.booleanValue()) {
+					clearRenderError();
+					mEntire.setImageBitmap(mEntireBm);
+					mEntire.invalidate();
+				} else {
+					setRenderError("Error rendering page");
+				}
 				setBackgroundColor(Color.TRANSPARENT);
-
 			}
 		};
 
@@ -284,8 +341,8 @@ public class PageView extends ViewGroup {
 					if (!mIsBlank && mLinks != null && mHighlightLinks) {
 						paint.setColor(LINK_COLOR);
 						for (Link link : mLinks)
-							canvas.drawRect(link.bounds.x0*scale, link.bounds.y0*scale,
-									link.bounds.x1*scale, link.bounds.y1*scale,
+							canvas.drawRect(link.getBounds().x0*scale, link.getBounds().y0*scale,
+									link.getBounds().x1*scale, link.getBounds().y1*scale,
 									paint);
 					}
 				}
@@ -332,6 +389,10 @@ public class PageView extends ViewGroup {
 			int limit = Math.min(mParentSize.x, mParentSize.y)/2;
 			mBusyIndicator.measure(View.MeasureSpec.AT_MOST | limit, View.MeasureSpec.AT_MOST | limit);
 		}
+		if (mErrorIndicator != null) {
+			int limit = Math.min(mParentSize.x, mParentSize.y)/2;
+			mErrorIndicator.measure(View.MeasureSpec.AT_MOST | limit, View.MeasureSpec.AT_MOST | limit);
+		}
 	}
 
 	@Override
@@ -372,9 +433,23 @@ public class PageView extends ViewGroup {
 
 			mBusyIndicator.layout((w-bw)/2, (h-bh)/2, (w+bw)/2, (h+bh)/2);
 		}
+
+		if (mErrorIndicator != null) {
+			int bw = (int) (8.5 * mErrorIndicator.getMeasuredWidth());
+			int bh = (int) (11 * mErrorIndicator.getMeasuredHeight());
+			mErrorIndicator.layout((w-bw)/2, (h-bh)/2, (w+bw)/2, (h+bh)/2);
+		}
 	}
 
 	public void updateHq(boolean update) {
+		if (mErrorIndicator != null) {
+			if (mPatch != null) {
+				mPatch.setImageBitmap(null);
+				mPatch.invalidate();
+			}
+			return;
+		}
+
 		Rect viewArea = new Rect(getLeft(),getTop(),getRight(),getBottom());
 		if (viewArea.width() == mSize.x || viewArea.height() == mSize.y) {
 			// If the viewArea's size matches the unzoomed size, there is no need for an hq patch
@@ -416,7 +491,7 @@ public class PageView extends ViewGroup {
 					mSearchView.bringToFront();
 			}
 
-			CancellableTaskDefinition<Void, Void> task;
+			CancellableTaskDefinition<Void, Boolean> task;
 
 			if (completeRedraw)
 				task = getDrawPageTask(mPatchBm, patchViewSize.x, patchViewSize.y,
@@ -427,17 +502,22 @@ public class PageView extends ViewGroup {
 						patchArea.left, patchArea.top,
 						patchArea.width(), patchArea.height());
 
-			mDrawPatch = new CancellableAsyncTask<Void,Void>(task) {
+			mDrawPatch = new CancellableAsyncTask<Void, Boolean>(task) {
 
-				public void onPostExecute(Void result) {
-					mPatchViewSize = patchViewSize;
-					mPatchArea = patchArea;
-					mPatch.setImageBitmap(mPatchBm);
-					mPatch.invalidate();
-					//requestLayout();
-					// Calling requestLayout here doesn't lead to a later call to layout. No idea
-					// why, but apparently others have run into the problem.
-					mPatch.layout(mPatchArea.left, mPatchArea.top, mPatchArea.right, mPatchArea.bottom);
+				public void onPostExecute(Boolean result) {
+					if (result.booleanValue()) {
+						mPatchViewSize = patchViewSize;
+						mPatchArea = patchArea;
+						clearRenderError();
+						mPatch.setImageBitmap(mPatchBm);
+						mPatch.invalidate();
+						//requestLayout();
+						// Calling requestLayout here doesn't lead to a later call to layout. No idea
+						// why, but apparently others have run into the problem.
+						mPatch.layout(mPatchArea.left, mPatchArea.top, mPatchArea.right, mPatchArea.bottom);
+					} else {
+						setRenderError("Error rendering patch");
+					}
 				}
 			};
 
@@ -458,11 +538,16 @@ public class PageView extends ViewGroup {
 		}
 
 		// Render the page in the background
-		mDrawEntire = new CancellableAsyncTask<Void, Void>(getUpdatePageTask(mEntireBm, mSize.x, mSize.y, 0, 0, mSize.x, mSize.y)) {
+		mDrawEntire = new CancellableAsyncTask<Void, Boolean>(getUpdatePageTask(mEntireBm, mSize.x, mSize.y, 0, 0, mSize.x, mSize.y)) {
 
-			public void onPostExecute(Void result) {
-				mEntire.setImageBitmap(mEntireBm);
-				mEntire.invalidate();
+			public void onPostExecute(Boolean result) {
+				if (result.booleanValue()) {
+					clearRenderError();
+					mEntire.setImageBitmap(mEntireBm);
+					mEntire.invalidate();
+				} else {
+					setRenderError("Error updating page");
+				}
 			}
 		};
 
@@ -498,13 +583,13 @@ public class PageView extends ViewGroup {
 
 	public int hitLink(Link link) {
 		if (link.isExternal()) {
-			Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(link.uri));
+			Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(link.getURI()));
 			intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET); // API>=21: FLAG_ACTIVITY_NEW_DOCUMENT
 			try {
 				mContext.startActivity(intent);
 			} catch (FileUriExposedException x) {
 				Log.e(APP, x.toString());
-				Toast.makeText(getContext(), "Android does not allow following file:// link: " + link.uri, Toast.LENGTH_LONG).show();
+				Toast.makeText(getContext(), "Android does not allow following file:// link: " + link.getURI(), Toast.LENGTH_LONG).show();
 			} catch (Throwable x) {
 				Log.e(APP, x.toString());
 				Toast.makeText(getContext(), x.getMessage(), Toast.LENGTH_LONG).show();
@@ -526,46 +611,62 @@ public class PageView extends ViewGroup {
 
 		if (mLinks != null)
 			for (Link l: mLinks)
-				if (l.bounds.contains(docRelX, docRelY))
+				if (l.getBounds().contains(docRelX, docRelY))
 					return hitLink(l);
 		return 0;
 	}
 
-	protected CancellableTaskDefinition<Void, Void> getDrawPageTask(final Bitmap bm, final int sizeX, final int sizeY,
+	protected CancellableTaskDefinition<Void, Boolean> getDrawPageTask(final Bitmap bm, final int sizeX, final int sizeY,
 			final int patchX, final int patchY, final int patchWidth, final int patchHeight) {
-		return new MuPDFCancellableTaskDefinition<Void, Void>() {
+		return new MuPDFCancellableTaskDefinition<Void, Boolean>() {
 			@Override
-			public Void doInBackground(Cookie cookie, Void ... params) {
+			public Boolean doInBackground(Cookie cookie, Void ... params) {
+				if (bm == null)
+					return new Boolean(false);
 				// Workaround bug in Android Honeycomb 3.x, where the bitmap generation count
 				// is not incremented when drawing.
 				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB &&
 						Build.VERSION.SDK_INT < Build.VERSION_CODES.ICE_CREAM_SANDWICH)
 					bm.eraseColor(0);
-				mCore.drawPage(bm, mPageNumber, sizeX, sizeY, patchX, patchY, patchWidth, patchHeight, cookie);
-				return null;
+				try {
+					mCore.drawPage(bm, mPageNumber, sizeX, sizeY, patchX, patchY, patchWidth, patchHeight, cookie);
+					return new Boolean(true);
+				} catch (RuntimeException e) {
+					return new Boolean(false);
+				}
 			}
 		};
 
 	}
 
-	protected CancellableTaskDefinition<Void, Void> getUpdatePageTask(final Bitmap bm, final int sizeX, final int sizeY,
+	protected CancellableTaskDefinition<Void, Boolean> getUpdatePageTask(final Bitmap bm, final int sizeX, final int sizeY,
 			final int patchX, final int patchY, final int patchWidth, final int patchHeight)
 	{
-		return new MuPDFCancellableTaskDefinition<Void, Void>() {
+		return new MuPDFCancellableTaskDefinition<Void, Boolean>() {
 			@Override
-			public Void doInBackground(Cookie cookie, Void ... params) {
+			public Boolean doInBackground(Cookie cookie, Void ... params) {
+				if (bm == null)
+					return new Boolean(false);
 				// Workaround bug in Android Honeycomb 3.x, where the bitmap generation count
 				// is not incremented when drawing.
 				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB &&
 						Build.VERSION.SDK_INT < Build.VERSION_CODES.ICE_CREAM_SANDWICH)
 					bm.eraseColor(0);
-				mCore.updatePage(bm, mPageNumber, sizeX, sizeY, patchX, patchY, patchWidth, patchHeight, cookie);
-				return null;
+				try {
+					mCore.updatePage(bm, mPageNumber, sizeX, sizeY, patchX, patchY, patchWidth, patchHeight, cookie);
+					return new Boolean(true);
+				} catch (RuntimeException e) {
+					return new Boolean(false);
+				}
 			}
 		};
 	}
 
 	protected Link[] getLinkInfo() {
-		return mCore.getPageLinks(mPageNumber);
+		try {
+			return mCore.getPageLinks(mPageNumber);
+		} catch (RuntimeException e) {
+			return null;
+		}
 	}
 }

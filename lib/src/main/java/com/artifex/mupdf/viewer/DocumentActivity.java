@@ -550,7 +550,7 @@ public class DocumentActivity extends Activity
 						Bundle bundle = new Bundle();
 						bundle.putInt("POSITION", mDocView.getDisplayedViewIndex());
 						bundle.putSerializable("OUTLINE", mFlatOutline);
-						intent.putExtras(bundle);
+						intent.putExtra("PALLETBUNDLE", Pallet.sendBundle(bundle));
 						startActivityForResult(intent, OUTLINE_REQUEST);
 					}
 				}
@@ -581,7 +581,7 @@ public class DocumentActivity extends Activity
 	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 		switch (requestCode) {
 		case OUTLINE_REQUEST:
-			if (resultCode >= RESULT_FIRST_USER) {
+			if (resultCode >= RESULT_FIRST_USER && mDocView != null) {
 				mDocView.pushHistory();
 				mDocView.setDisplayedViewIndex(resultCode-RESULT_FIRST_USER);
 			}
@@ -832,7 +832,7 @@ public class DocumentActivity extends Activity
 
 	@Override
 	public void onBackPressed() {
-		if (mDocView == null || !mDocView.popHistory()) {
+		if (mDocView == null || (mDocView != null && !mDocView.popHistory())) {
 			super.onBackPressed();
 			if (mReturnToLibraryActivity) {
 				Intent intent = getPackageManager().getLaunchIntentForPackage(getComponentName().getPackageName());

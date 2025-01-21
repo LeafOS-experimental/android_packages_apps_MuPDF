@@ -25,6 +25,7 @@ public class MuPDFCore
 	private Document doc;
 	private Outline[] outline;
 	private int pageCount = -1;
+	private boolean reflowable = false;
 	private int currentPage;
 	private Page page;
 	private float pageWidth;
@@ -40,6 +41,7 @@ public class MuPDFCore
 		this.doc = doc;
 		doc.layout(layoutW, layoutH, layoutEM);
 		pageCount = doc.countPages();
+		reflowable = doc.isReflowable();
 		resolution = 160;
 		currentPage = -1;
 	}
@@ -60,8 +62,8 @@ public class MuPDFCore
 		return pageCount;
 	}
 
-	public synchronized boolean isReflowable() {
-		return doc.isReflowable();
+	public boolean isReflowable() {
+		return reflowable;
 	}
 
 	public synchronized int layout(int oldPage, int w, int h, int em) {
@@ -92,23 +94,25 @@ public class MuPDFCore
 		else if (pageNum < 0)
 			pageNum = 0;
 		if (pageNum != currentPage) {
-			currentPage = pageNum;
 			if (page != null)
 				page.destroy();
 			page = null;
 			if (displayList != null)
 				displayList.destroy();
 			displayList = null;
+			page = null;
+			pageWidth = 0;
+			pageHeight = 0;
+			currentPage = -1;
+
 			if (doc != null) {
 				page = doc.loadPage(pageNum);
 				Rect b = page.getBounds();
 				pageWidth = b.x1 - b.x0;
 				pageHeight = b.y1 - b.y0;
-			} else {
-				page = null;
-				pageWidth = 0;
-				pageHeight = 0;
 			}
+
+			currentPage = pageNum;
 		}
 	}
 
@@ -137,7 +141,11 @@ public class MuPDFCore
 		gotoPage(pageNum);
 
 		if (displayList == null && page != null)
-			displayList = page.toDisplayList();
+			try {
+				displayList = page.toDisplayList();
+			} catch (Exception ex) {
+				displayList = null;
+			}
 
 		if (displayList == null || page == null)
 			return;
